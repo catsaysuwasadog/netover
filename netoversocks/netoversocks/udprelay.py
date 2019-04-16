@@ -46,7 +46,7 @@
 # `client`  means UDP clients that connects to other servers
 # `server`  means the UDP server that handles user requests
 
-from __future__ import absolute_import, division, print_function, unicode_literals
+from __future__ import absolute_import, division, print_function
 
 import socket
 import logging

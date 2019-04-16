@@ -2,7 +2,7 @@
 # -*- coding:utf-8 -*-
 # Copyright (c) CH, All rights reserved. Licensed by iduosi@icloud.com
 
-from __future__ import absolute_import, division, print_function, unicode_literals
+from __future__ import absolute_import, division, print_function
 
 from ctypes import c_char_p, c_int, c_ulonglong, byref, c_ulong, create_string_buffer, c_void_p
 from netoversocks.cryptographic import util
