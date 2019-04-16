@@ -275,11 +275,12 @@ function FUN_DOWNLOAD_PACKAGES()
     local package_type=$1
     case "${package_type}" in
     "libsodium")
-        FUN_INFO_MSG "u will download ${GL_DEPS_LIBSODIUM_VERSION}.tar.gz to ${GL_DEPS_PACKAGE_PATH}."
-        # deps package: libsodium
-        if ! wget --no-check-certificate -O ${GL_DEPS_PACKAGE_PATH}/${GL_DEPS_LIBSODIUM_VERSION}.tar.gz ${GL_DEPS_LIBSODIUM_DOWNLOAD_URL}; then
-            FUN_ERROR_MSG "Failed to download ${GL_DEPS_LIBSODIUM_VERSION}.tar.gz!" "F"
-            ${GL_QUIT} 1
+        if [ ! -f ${GL_DEPS_PACKAGE_PATH}/${GL_DEPS_LIBSODIUM_VERSION}.tar.gz ]; then
+            FUN_INFO_MSG "u will download ${GL_DEPS_LIBSODIUM_VERSION}.tar.gz to ${GL_DEPS_PACKAGE_PATH}."
+            if ! wget --no-check-certificate -O ${GL_DEPS_PACKAGE_PATH}/${GL_DEPS_LIBSODIUM_VERSION}.tar.gz ${GL_DEPS_LIBSODIUM_DOWNLOAD_URL}; then
+                FUN_ERROR_MSG "Failed to download ${GL_DEPS_LIBSODIUM_VERSION}.tar.gz!" "F"
+                ${GL_QUIT} 1
+            fi
         fi
         ;;
     *)
@@ -623,7 +624,6 @@ function FUN_TEST_OPTION_SETTING()
             read -p "(Default port: ${conf_serve_port}):" GL_SERVE_PORT
 
             [ -z "${GL_SERVE_PORT}" ] && GL_SERVE_PORT=${conf_serve_port}
-
             expr ${GL_SERVE_PORT} + 1 &>/dev/null
 
             if [ $? -eq 0 ]; then
@@ -683,11 +683,11 @@ function FUN_TEST_OPTION_SETTING()
     FUN_INFO_MSG "Serve encryption-method: ${GL_USE_METHOD}" "F"
     echo
 }
-########################################################################################################################
-#
-# Usage: install.sh [install|uninstall]
-#
-########################################################################################################################
+
+
+# +******************************************************************+
+# | Usage: install.sh [install|uninstall]                            |
+# +******************************************************************+
 _action=$1
 [ -z $1 ] && _action=install
 case "x${_action}" in
