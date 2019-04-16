@@ -2,26 +2,35 @@
 # -*- coding:utf-8 -*-
 # Copyright (c) CH, All rights reserved. Licensed by iduosi@icloud.com
 
-# from __future__ import absolute_import, division, print_function
-# from __future__ import unicode_literals
-
 import codecs
+import os
 from setuptools import setup
 
 
-with codecs.open('README.rst', encoding='utf-8') as f:
-    long_description = f.read()
+here = os.path.abspath(os.path.dirname(__file__))
+
+
+def read(*parts):
+    with codecs.open(os.path.join(here, *parts), mode='r', encoding='utf-8') as fp:
+        return fp.read()
+
+
+with open('netoversocks/__init__.py') as f:
+    ns = {}
+    exec(f.read(), ns)
+    version = ns["version"]
+
 
 setup(
     name='netoversocks',
-    version='8.0.0',
-    license='',
+    version=version,
+    license='http://www.apache.org/licenses/LICENSE-2.0',
     description="""A tunnel proxy that help you open a new world.""",
     author='iduosi',
     author_email='iduosi@icloud.com',
     maintainer='iduosi',
     maintainer_email='iduosi@icloud.com',
-    url='',
+    url='https://github.com/catsaysuwasadog/netover',
     packages=['netoversocks', 'netoversocks.cryptographic'],
     package_data={'netoversocks': ['README.rst', 'LICENSE']},
     install_requires=[],
@@ -40,6 +49,5 @@ setup(
         'Programming Language :: Python :: Implementation :: PyPy',
         'Topic :: Internet :: Proxy Servers',
     ],
-    long_description=long_description,
+    long_description=read('README.rst'),
 )
-
