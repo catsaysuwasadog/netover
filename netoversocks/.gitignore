@@ -1,0 +1,38 @@
+.idea
+.vscode
+.DS_STORE
+
+# Ignore: Byte-compiled, optimized, DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Ignore: Distribution, packaging
+build/
+dist/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# Ignore: Unit test, coverage, reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Ignore: Environments
+.env
+.venv
+env/
+venv/
