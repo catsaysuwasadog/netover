@@ -7,19 +7,98 @@
 EXTEND_PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin
 export PATH=${PATH}:${EXTEND_PATH}
 
-clear
+DATETIME_FORMAT=`date -d "today" +"%Y-%m-%d %H:%M:%S"`
+
+GL_DEPS_PACKAGE_PATH=_deps_packages
+GL_THE_FILENAME=
+GL_THE_FILEPATH=
+GL_QUIT=
+[[ ${SHLVL} = 1 ]] && GL_QUIT=return || GL_QUIT=exit
+
+GL_DEPS_LIBSODIUM_VERSION="libsodium-1.0.17"
+GL_DEPS_LIBSODIUM_DOWNLOAD_URL="https://github.com/jedisct1/libsodium/releases/download/1.0.17/libsodium-1.0.17.tar.gz"
+
+#
+# 控制台有色输出函数：
+#   \e 或 \033 = 打开反斜杠ESC转义
+#   Format: \033[第一个参数-背景色;第二个参数-前景色;第三个参数-第四个参数-m
+#       Like: 红色字体输出 = \\033[1;31m$1
+#       第一个参数: 0 透明使用终端颜色; 1 高亮 40 黑; 41 红; 42 绿; 43 黄; 44 蓝; 45 紫; 46 青绿; 47白灰
+#       第二个参数：30 黑; 31 红; 32 绿; 33 黄; 34 蓝; 35 紫; 36 青绿; 37 白灰
+#       第三个参数：高亮是1; 不高亮是0
+#       第四个参数为m: m后面紧跟字符串
+#
+#   恢复默认颜色输出配置：\\033[0m\n
+#
+function FUN_ERROR_MSG()
+{
+    local msg=$1
+    local filter_pre=$2
+
+    if [[ "x${filter_pre}" == "xF" ]]; then
+        printf "\\033[0;31;1m${msg}\\033[0m\n"
+    else
+        printf "\\033[0;31;1m[${DATETIME_FORMAT}] ERROR: ${msg}\\033[0m\n"
+    fi
+}
+function FUN_WARN_MSG()
+{
+    local msg=$1
+    local filter_pre=$2
+
+    if [[ "x${filter_pre}" == "xF" ]]; then
+        printf "\\033[0;33;1m${msg}\\033[0m\n"
+    else
+        printf "\\033[0;33;1m[${DATETIME_FORMAT}] WARN: ${msg}\\033[0m\n"
+    fi
+}
+function FUN_INFO_MSG()
+{
+    local msg=$1
+    local filter_pre=$2
+
+    if [[ "x${filter_pre}" == "xF" ]]; then
+        printf "\\033[0;32;1m${msg}\\033[0m\n"
+    else
+        printf "\\033[0;32;1m[${DATETIME_FORMAT}] INFO: ${msg}\\033[0m\n"
+    fi
+}
+
+if [ $(id -u) != "0" ]; then
+    FUN_ERROR_MSG "u must be root to run this script, please use root[command: sudo su | su root | sudo ./]." "F"
+    ${GL_QUIT} 1
+fi
+
+echo "$0" | grep -q "bash"
+_bash_run_type=$?
+if [ ${_bash_run_type} -eq 0 ]; then
+    FUN_ERROR_MSG "please use execute './[bash-filename].sh' bash." "F"
+    ${GL_QUIT} 1
+else
+    if [ ${0:0:1} = "/" ]; then
+        _THE_FILE=$0
+    else
+        _THE_FILE=$(pwd)/$0
+    fi
+
+    cd "$(dirname "${_THE_FILE}")"
+    GL_THE_FILEPATH=$PWD
+    GL_DEPS_PACKAGE_PATH="${GL_THE_FILEPATH}/_deps_packages"
+    GL_THE_FILENAME="${_THE_FILE##*/}"
+    cd - > /dev/null
+fi
 
 echo
-echo "usage for install netoversocks ..."
+FUN_INFO_MSG "GLOBAL var print:" "F"
+FUN_INFO_MSG "GL_DEPS_PACKAGE_PATH: ${GL_DEPS_PACKAGE_PATH}" "F"
+FUN_INFO_MSG "GL_THE_FILENAME: ${GL_THE_FILENAME}" "F"
+FUN_INFO_MSG "GL_THE_FILEPATH: ${GL_THE_FILEPATH}" "F"
+FUN_INFO_MSG "GL_QUIT: ${GL_QUIT}" "F"
+FUN_INFO_MSG "GL_DEPS_LIBSODIUM_VERSION: ${GL_DEPS_LIBSODIUM_VERSION}" "F"
+FUN_INFO_MSG "GL_DEPS_LIBSODIUM_DOWNLOAD_URL: ${GL_DEPS_LIBSODIUM_DOWNLOAD_URL}" "F"
 echo
 
-libsodium_file="libsodium-1.0.17"
-libsodium_url="https://github.com/jedisct1/libsodium/releases/download/1.0.17/libsodium-1.0.17.tar.gz"
-
-
-cur_dir=`pwd`
-
-ciphers=(
+GL_USE_METHODCIPHERS=(
 aes-256-gcm
 aes-192-gcm
 aes-128-gcm
@@ -38,59 +117,65 @@ chacha20
 rc4-md5
 )
 
-red='\033[0;31m'
-green='\033[0;32m'
-yellow='\033[0;33m'
-plain='\033[0m'
-
-# Make sure only root can run our script
-[[ $EUID -ne 0 ]] && echo -e "[${red}Error${plain}] This script must be run as root!" && exit 1
-
-disable_selinux(){
+# DEFINE-FUNCTION:
+#   FUN_DISABLE_SELINUX: turn-off SELINUX, like use command: setenforce 0.
+function FUN_DISABLE_SELINUX()
+{
     if [ -s /etc/selinux/config ] && grep 'SELINUX=enforcing' /etc/selinux/config; then
         sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config
         setenforce 0
     fi
 }
 
-check_sys(){
-    local checkType=$1
-    local value=$2
-
-    local release=''
-    local systemPackage=''
+# DEFINE-FUNCTION:
+#   FUN_CHECK_OS_OPTION: check system option is allow or deny.
+#
+# Input&Output help:
+#   @param check_type : the first param
+#   @param check_type_value : the second param
+#   @return 0 | 1 : result of check option, true or false
+#
+# Usage help:
+#   FUN_CHECK_OS_OPTION system_release centos
+#   FUN_CHECK_OS_OPTION system_package_manager yum
+function FUN_CHECK_OS_OPTION()
+{
+    local check_type=$1
+    local check_type_value=$2
+    local system_release=
+    local system_package_manager=
 
     if [[ -f /etc/redhat-release ]]; then
-        release="centos"
-        systemPackage="yum"
+        system_release="centos"
+        system_package_manager="yum"
     elif grep -Eqi "debian" /etc/issue; then
-        release="debian"
-        systemPackage="apt"
+        system_release="debian"
+        system_package_manager="apt"
     elif grep -Eqi "ubuntu" /etc/issue; then
-        release="ubuntu"
-        systemPackage="apt"
+        system_release="ubuntu"
+        system_package_manager="apt"
     elif grep -Eqi "centos|red hat|redhat" /etc/issue; then
-        release="centos"
-        systemPackage="yum"
+        system_release="centos"
+        system_package_manager="yum"
     elif grep -Eqi "debian" /proc/version; then
-        release="debian"
-        systemPackage="apt"
+        system_release="debian"
+        system_package_manager="apt"
     elif grep -Eqi "ubuntu" /proc/version; then
-        release="ubuntu"
-        systemPackage="apt"
+        system_release="ubuntu"
+        system_package_manager="apt"
     elif grep -Eqi "centos|red hat|redhat" /proc/version; then
-        release="centos"
-        systemPackage="yum"
+        system_release="centos"
+        system_package_manager="yum"
     fi
 
-    if [[ "${checkType}" == "sysRelease" ]]; then
-        if [ "${value}" == "${release}" ]; then
+    if [[ "${check_type}" == "system_release" ]]; then
+        if [ "${check_type_value}" == "${system_release}" ]; then
             return 0
         else
             return 1
         fi
-    elif [[ "${checkType}" == "packageManager" ]]; then
-        if [ "${value}" == "${systemPackage}" ]; then
+    elif [[ "${check_type}" == "system_package_manager" ]]; then
+        if [ "${check_type_value}" == "${system_package_manager}" ]; then
             return 0
         else
             return 1
@@ -98,7 +183,13 @@ check_sys(){
     fi
 }
 
-getversion(){
+# DEFINE-FUNCTION:
+#   FUN_GET_OS_VERSION: return current system os version string.
+#
+# Usage help:
+#   local os_version="$(FUN_GET_OS_VERSION)"
+function FUN_GET_OS_VERSION()
+{
     if [[ -s /etc/redhat-release ]]; then
         grep -oE  "[0-9.]+" /etc/redhat-release
     else
@@ -106,12 +197,26 @@ getversion(){
     fi
 }
 
-centosversion(){
-    if check_sys sysRelease centos; then
-        local code=$1
-        local version="$(getversion)"
-        local main_ver=${version%%.*}
-        if [ "$main_ver" == "$code" ]; then
+# DEFINE-FUNCTION:
+#   FUN_CHECK_CENTOS_VERSION: check centos version is formated with input param.
+#
+# Input&Output help:
+#   @param version : the first param
+#   @return 0 | 1 : result of check option, true or false
+#
+# Usage help:
+#   if FUN_CHECK_CENTOS_VERSION 5; then
+#       # yes code segment
+#   else
+#       # no code segment
+#   fi
+function FUN_CHECK_CENTOS_VERSION()
+{
+    if FUN_CHECK_OS_OPTION system_release centos; then
+        local version=$1
+        local current_version="$(FUN_GET_OS_VERSION)"
+        local main_current_version=${current_version%%.*}
+        if [ "x${main_current_version}" == "x${version}" ]; then
             return 0
         else
             return 1
@@ -121,15 +226,26 @@ centosversion(){
     fi
 }
 
-get_ip(){
-    local IP=$( ip addr | egrep -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | egrep -v "^192\.168|^172\.1[6-9]\.|^172\.2[0-9]\.|^172\.3[0-2]\.|^10\.|^127\.|^255\.|^0\." | head -n 1 )
-    [ -z ${IP} ] && IP=$( wget -qO- -t1 -T2 ipv4.icanhazip.com )
-    [ -z ${IP} ] && IP=$( wget -qO- -t1 -T2 ipinfo.io/ip )
-    [ ! -z ${IP} ] && echo ${IP} || echo
+# DEFINE-FUNCTION:
+#   FUN_GET_PUBLIC_IP_ADDRESS: return current machine public ip address.
+#
+# Usage help:
+#   local public_ip_address="$(FUN_GET_PUBLIC_IP_ADDRESS)"
+function FUN_GET_PUBLIC_IP_ADDRESS()
+{
+    local ip_address=$( ip addr | egrep -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | egrep -v "^192\.168|^172\.1[6-9]\.|^172\.2[0-9]\.|^172\.3[0-2]\.|^10\.|^127\.|^255\.|^0\." | head -n 1 )
+    [ -z ${ip_address} ] && ip_address=$( wget -qO- -t1 -T2 ipv4.icanhazip.com )
+    [ -z ${ip_address} ] && ip_address=$( wget -qO- -t1 -T2 ipinfo.io/ip )
+    [ ! -z ${ip_address} ] && echo ${ip_address} || echo
 }
 
-
-get_char(){
+# DEFINE-FUNCTION:
+#   FUN_GET_INPUT_CHAR: return input char from console shell.
+#
+# Usage help:
+#   local read_char="$(FUN_GET_INPUT_CHAR)"
+function FUN_GET_INPUT_CHAR()
+{
     SAVEDSTTY=`stty -g`
     stty -echo
     stty cbreak
@@ -139,276 +255,450 @@ get_char(){
     stty $SAVEDSTTY
 }
 
-pre_install(){
-    if check_sys packageManager yum || check_sys packageManager apt; then
-        # Not support CentOS 5
-        if centosversion 5; then
-            echo -e "$[{red}Error${plain}] Not supported CentOS 5, please change to CentOS 6+/Debian 7+/Ubuntu 12+ and try again!"
-            exit 1
+# DEFINE-FUNCTION:
+#   FUN_CLEANUP_ALL: clean all files from dependency_package.
+function FUN_CLEANUP_ALL()
+{
+    cd ${GL_DEPS_PACKAGE_PATH}
+    # rm -rf !(.vendor.txt)
+    rm -rf ${GL_DEPS_LIBSODIUM_VERSION}.tar.gz ${GL_DEPS_LIBSODIUM_VERSION}
+    cd ${GL_THE_FILEPATH}
+}
+
+# DEFINE-FUNCTION:
+#   FUN_DOWNLOAD_PACKAGES: download package to dependency_package.
+#
+# Usage help:
+#   FUN_DOWNLOAD_PACKAGES libsodium
+function FUN_DOWNLOAD_PACKAGES()
+{
+    local package_type=$1
+    case "${package_type}" in
+    "libsodium")
+        FUN_INFO_MSG "u will download ${GL_DEPS_LIBSODIUM_VERSION}.tar.gz to ${GL_DEPS_PACKAGE_PATH}."
+        # deps package: libsodium
+        if ! wget --no-check-certificate -O ${GL_DEPS_PACKAGE_PATH}/${GL_DEPS_LIBSODIUM_VERSION}.tar.gz ${GL_DEPS_LIBSODIUM_DOWNLOAD_URL}; then
+            FUN_ERROR_MSG "Failed to download ${GL_DEPS_LIBSODIUM_VERSION}.tar.gz!" "F"
+            ${GL_QUIT} 1
         fi
-    else
-        echo -e "[${red}Error${plain}] Your OS is not supported. please change OS to CentOS/Debian/Ubuntu and try again!"
-        exit 1
-    fi
-    # Set shadowsocks config password
-    echo "Please enter password for shadowsocks-python"
-    read -p "(Default password: abc123456):" shadowsockspwd
-    [ -z "${shadowsockspwd}" ] && shadowsockspwd="abc123456"
-    echo
-    echo "---------------------------"
-    echo "password = ${shadowsockspwd}"
-    echo "---------------------------"
-    echo
-    # Set shadowsocks config port
-    while true
-    do
-    dport=$(shuf -i 9000-19999 -n 1)
-    echo "Please enter a port for shadowsocks-python [1-65535]"
-    read -p "(Default port: ${dport}):" shadowsocksport
-    [ -z "$shadowsocksport" ] && shadowsocksport=${dport}
-    expr ${shadowsocksport} + 1 &>/dev/null
-    if [ $? -eq 0 ]; then
-        if [ ${shadowsocksport} -ge 1 ] && [ ${shadowsocksport} -le 65535 ] && [ ${shadowsocksport:0:1} != 0 ]; then
+        ;;
+    *)
+        FUN_INFO_MSG "No input, will download nothing."
+    esac
+}
+
+GL_SERVE_PORT=10248
+GL_USE_PASSWORD="OGRhYzI3YzU1"
+GL_USE_METHOD="aes-256-cfb"
+
+# DEFINE-FUNCTION:
+#   FUN_PRE_INSTALL: pre install, do something.
+function FUN_PRE_INSTALL()
+{
+    local need_conf_serve_option="n"
+    local conf_serve_port=$(shuf -i 10000-30000 -n 1)
+    local conf_serve_pass=$(date +%s | sha256sum | base64 | head -c 12 ; echo)
+
+    FUN_INFO_MSG "If u don't want to config your owner running option..., you can skip it with default config." "F"
+    FUN_INFO_MSG "Do you want to config running option? (y/n)" "F"
+    read -p "(Default: n):" need_conf_serve_option
+
+    [ -z ${need_conf_serve_option} ] && need_conf_serve_option="n"
+
+    if [ "${need_conf_serve_option}" == "y" ] || [ "${need_conf_serve_option}" == "Y" ]; then
+        FUN_INFO_MSG "Please enter password for netoversocks" "F"
+        read -p "(Default password: ${conf_serve_pass}):" GL_USE_PASSWORD
+
+        [ -z "${GL_USE_PASSWORD}" ] && GL_USE_PASSWORD="${conf_serve_pass}"
+        echo
+        FUN_INFO_MSG "Configure serve password = ${GL_SERVE_PORT}" "F"
+        echo
+
+        while true
+        do
+            FUN_INFO_MSG "Please enter a port for netoversocks [1000-65535]" "F"
+            read -p "(Default port: ${conf_serve_port}):" GL_SERVE_PORT
+
+            [ -z "${GL_SERVE_PORT}" ] && GL_SERVE_PORT=${conf_serve_port}
+
+            expr ${GL_SERVE_PORT} + 1 &>/dev/null
+
+            if [ $? -eq 0 ]; then
+                if [ ${GL_SERVE_PORT} -ge 1000 ] && [ ${GL_SERVE_PORT} -le 65535 ] && [ ${GL_SERVE_PORT:0:1} != 0 ]; then
+                    echo
+                    FUN_INFO_MSG "Configure serve port = ${GL_SERVE_PORT}" "F"
+                    echo
+                    break
+                fi
+            fi
+
+            FUN_ERROR_MSG "Please enter a correct number [1000-65535]."
+        done
+
+        while true
+        do
+            FUN_INFO_MSG "Please select stream cipher for netoversocks, like aes-256-cfb" "F"
+
+            local cipher_item_loop=
+            local cipher_item_selected=
+
+            for ((i=1; i<=${#GL_USE_METHODCIPHERS[@]}; i++)); do
+                cipher_item_loop="${GL_USE_METHODCIPHERS[$i-1]}"
+
+                FUN_INFO_MSG "[${i}] ${cipher_item_loop}" "F"
+            done
+
+            read -p "Which cipher you'd select(Default: ${GL_USE_METHODCIPHERS[0]}):" cipher_item_selected
+
+            [ -z "${cipher_item_selected}" ] && cipher_item_selected=1
+            expr ${cipher_item_selected} + 1 &>/dev/null
+
+            if [ $? -ne 0 ]; then
+                FUN_ERROR_MSG "Please enter a number."
+                continue
+            fi
+
+            if [[ "${cipher_item_selected}" -lt 1 || "${cipher_item_selected}" -gt ${#GL_USE_METHODCIPHERS[@]} ]]; then
+                FUN_ERROR_MSG "Please enter a number between 1 and ${#GL_USE_METHODCIPHERS[@]}" "F"
+                continue
+            fi
+
+            GL_USE_METHOD=${GL_USE_METHODCIPHERS[${cipher_item_selected}-1]}
+
             echo
-            echo "---------------------------"
-            echo "port = ${shadowsocksport}"
-            echo "---------------------------"
+            FUN_INFO_MSG "GL_USE_METHOD = ${GL_USE_METHOD}" "F"
             echo
             break
-        fi
+        done
     fi
-    echo -e "[${red}Error${plain}] Please enter a correct number [1-65535]"
-    done
-    # Set shadowsocks config stream ciphers
-    while true
-    do
-    echo -e "Please select stream cipher for shadowsocks-python:"
-    for ((i=1;i<=${#ciphers[@]};i++ )); do
-        hint="${ciphers[$i-1]}"
-        echo -e "${green}${i}${plain}) ${hint}"
-    done
-    read -p "Which cipher you'd select(Default: ${ciphers[0]}):" pick
-    [ -z "$pick" ] && pick=1
-    expr ${pick} + 1 &>/dev/null
-    if [ $? -ne 0 ]; then
-        echo -e "[${red}Error${plain}] Please enter a number"
-        continue
-    fi
-    if [[ "$pick" -lt 1 || "$pick" -gt ${#ciphers[@]} ]]; then
-        echo -e "[${red}Error${plain}] Please enter a number between 1 and ${#ciphers[@]}"
-        continue
-    fi
-    shadowsockscipher=${ciphers[$pick-1]}
-    echo
-    echo "---------------------------"
-    echo "cipher = ${shadowsockscipher}"
-    echo "---------------------------"
-    echo
-    break
-    done
 
-    echo
-    echo "Press any key to start...or Press Ctrl+C to cancel"
-    char=`get_char`
-    # Install necessary dependencies
-    if check_sys packageManager yum; then
-        yum install -y python python-devel python-setuptools openssl openssl-devel curl wget unzip gcc automake autoconf make libtool
-    elif check_sys packageManager apt; then
+    if FUN_CHECK_OS_OPTION system_package_manager yum || FUN_CHECK_OS_OPTION system_package_manager apt; then
+        # NOW we not support CentOS 5/6
+        if FUN_CHECK_CENTOS_VERSION 5 || FUN_CHECK_CENTOS_VERSION 6; then
+            FUN_ERROR_MSG "Not supported CentOS[5/6], please use it with CentOS7+/Debian7+/Ubuntu12+, and try again!" "F"
+            ${GL_QUIT} 1
+        fi
+    else
+        FUN_ERROR_MSG "Not supported os-system, please use it with CentOS7+/Debian7+/Ubuntu12+, and try again!" "F"
+        ${GL_QUIT} 1
+    fi
+
+    FUN_INFO_MSG "Press any key to start...or Press Ctrl+C to cancel" "F"
+    _char=`FUN_GET_INPUT_CHAR`
+
+    if FUN_CHECK_OS_OPTION system_package_manager yum; then
+        yum install -y openssl openssl-devel curl wget unzip gcc automake autoconf make libtool
+        yum install -y python python-devel python-setuptools
+    elif FUN_CHECK_OS_OPTION system_package_manager apt; then
         apt-get -y update
-        apt-get -y install python python-dev python-setuptools openssl libssl-dev curl wget unzip gcc automake autoconf make libtool
+        apt-get -y install openssl libssl-dev curl wget unzip gcc automake autoconf make libtool
+        apt-get -y install python python-dev python-setuptools
     fi
-    cd ${cur_dir}
+
+    cd ${GL_THE_FILEPATH}
 }
 
-
-download_files(){
-    # Download libsodium file
-    if ! wget --no-check-certificate -O ${libsodium_file}.tar.gz ${libsodium_url}; then
-        echo -e "[${red}Error${plain}] Failed to download ${libsodium_file}.tar.gz!"
-        exit 1
+# DEFINE-FUNCTION:
+#   FUN_CONF: pre install, configure file.
+function FUN_CONF()
+{
+    if [ -f ${GL_THE_FILEPATH}/netoversocks.json ]; then
+        rm -f ${GL_THE_FILEPATH}/netoversocks.json
     fi
-    # Download Shadowsocks file
-    if ! wget --no-check-certificate -O shadowsocks-master.zip https://github.com/shadowsocks/shadowsocks/archive/master.zip; then
-        echo -e "[${red}Error${plain}] Failed to download shadowsocks python file!"
-        exit 1
-    fi
-    # Download Shadowsocks init script
-    if check_sys packageManager yum; then
-        if ! wget --no-check-certificate https://raw.githubusercontent.com/quniu/shadowsocks-all/master/service/shadowsocks -O /etc/init.d/shadowsocks; then
-            echo -e "[${red}Error${plain}] Failed to download shadowsocks chkconfig file!"
-            exit 1
-        fi
-    elif check_sys packageManager apt; then
-        if ! wget --no-check-certificate https://raw.githubusercontent.com/quniu/shadowsocks-all/master/service/shadowsocks-debian -O /etc/init.d/shadowsocks; then
-            echo -e "[${red}Error${plain}] Failed to download shadowsocks chkconfig file!"
-            exit 1
-        fi
-    fi
-}
 
-
-config_shadowsocks(){
-    cat > /etc/shadowsocks.json<<-EOF
+    if [ ! -f ${GL_THE_FILEPATH}/netoversocks.json ]; then
+        cat > ${GL_THE_FILEPATH}/netoversocks.json<<-EOF
 {
     "server":"0.0.0.0",
-    "server_port":${shadowsocksport},
+    "server_port":${GL_SERVE_PORT},
     "local_address":"127.0.0.1",
     "local_port":1080,
-    "password":"${shadowsockspwd}",
+    "password":"${GL_USE_PASSWORD}",
     "timeout":300,
-    "method":"${shadowsockscipher}",
+    "method":"${GL_USE_METHOD}",
     "fast_open":false
 }
 EOF
+    fi
 }
 
+# DEFINE-FUNCTION:
+#   FUN_FIREWALLD_SETTING: pre install, firewall&iptables setting.
+function FUN_FIREWALLD_SETTING()
+{
+    local setting_firewall_case="n"
 
-firewall_set(){
-    echo -e "[${green}Info${plain}] firewall set start..."
-    if centosversion 6; then
-        /etc/init.d/iptables status > /dev/null 2>&1
-        if [ $? -eq 0 ]; then
-            iptables -L -n | grep -i ${shadowsocksport} > /dev/null 2>&1
-            if [ $? -ne 0 ]; then
-                iptables -I INPUT -m state --state NEW -m tcp -p tcp --dport ${shadowsocksport} -j ACCEPT
-                iptables -I INPUT -m state --state NEW -m udp -p udp --dport ${shadowsocksport} -j ACCEPT
-                /etc/init.d/iptables save
-                /etc/init.d/iptables restart
+    FUN_INFO_MSG "Firewall setting, if you use aliyuncloud|tencentcloud|digitalocean|googlecloud..., you can skip it." "F"
+    FUN_INFO_MSG "Are you sure to set firewall about server port route? (y/n)" "F"
+    read -p "(Default: n):" setting_firewall_case
+
+    [ -z ${setting_firewall_case} ] && setting_firewall_case="n"
+
+    if [ "${setting_firewall_case}" == "y" ] || [ "${setting_firewall_case}" == "Y" ]; then
+        if FUN_CHECK_CENTOS_VERSION 7; then
+            systemctl status firewalld > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                firewall-cmd --permanent --zone=public --add-port=${GL_SERVE_PORT}/tcp
+                firewall-cmd --permanent --zone=public --add-port=${GL_SERVE_PORT}/udp
+                firewall-cmd --reload
             else
-                echo -e "[${green}Info${plain}] port ${shadowsocksport} has already been set up!"
+                FUN_ERROR_MSG "Failed to set firewalld, please enable port ${GL_SERVE_PORT} manually if necessary!"
             fi
-        else
-            echo -e "[${yellow}Warning${plain}] iptables looks like shutdown or not installed, please manually set it if necessary!"
         fi
-    elif centosversion 7; then
-        systemctl status firewalld > /dev/null 2>&1
-        if [ $? -eq 0 ]; then
-            firewall-cmd --permanent --zone=public --add-port=${shadowsocksport}/tcp
-            firewall-cmd --permanent --zone=public --add-port=${shadowsocksport}/udp
-            firewall-cmd --reload
-        else
-            echo -e "[${yellow}Warning${plain}] firewalld looks like not running or not installed, please enable port ${shadowsocksport} manually if necessary!"
-        fi
+        FUN_INFO_MSG "Firewall set completed success."
     fi
-    echo -e "[${green}Info${plain}] firewall set completed..."
 }
 
-
-install(){
-    # Install libsodium
+# DEFINE-FUNCTION:
+#   FUN_INSTALL: install, netoversocks setup.py install.
+function FUN_INSTALL()
+{
     if [ ! -f /usr/lib/libsodium.a ]; then
-        cd ${cur_dir}
-        tar zxf ${libsodium_file}.tar.gz
-        cd ${libsodium_file}
+        cd ${GL_DEPS_PACKAGE_PATH}
+        tar zxf ${GL_DEPS_LIBSODIUM_VERSION}.tar.gz
+
+        cd ${GL_DEPS_LIBSODIUM_VERSION}
         ./configure --prefix=/usr && make && make install
+
         if [ $? -ne 0 ]; then
-            echo -e "[${red}Error${plain}] libsodium install failed!"
-            install_cleanup
-            exit 1
+            FUN_CLEANUP_ALL
+            FUN_ERROR_MSG "Failed to install libsodium!" "F"
+            ${GL_QUIT} 1
         fi
     fi
+
+    cd ${GL_THE_FILEPATH}
 
     ldconfig
-    # Install Shadowsocks
-    cd ${cur_dir}
-    unzip -q shadowsocks-master.zip
-    if [ $? -ne 0 ];then
-        echo -e "[${red}Error${plain}] unzip shadowsocks-master.zip failed! please check unzip command!"
-        install_cleanup
-        exit 1
-    fi
+    cd ${GL_THE_FILEPATH}/netoversocks
+    python setup.py install --record ${GL_THE_FILEPATH}/install.log
 
-    cd ${cur_dir}/shadowsocks-master
-    python setup.py install --record /usr/local/shadowsocks_install.log
-
-    if [ -f /usr/bin/ssserver ] || [ -f /usr/local/bin/ssserver ]; then
-        chmod +x /etc/init.d/shadowsocks
-        if check_sys packageManager yum; then
-            chkconfig --add shadowsocks
-            chkconfig shadowsocks on
-        elif check_sys packageManager apt; then
-            update-rc.d -f shadowsocks defaults
+    cd ${GL_THE_FILEPATH}
+    if [ ! -f /etc/init.d/netoversocks ]; then
+        if FUN_CHECK_OS_OPTION system_package_manager yum; then
+            cp ${GL_THE_FILEPATH}/service/netoversocks-centos /etc/init.d/netoversocks
         fi
-        /etc/init.d/shadowsocks start
-    else
-        echo
-        echo -e "[${red}Error${plain}] Shadowsocks install failed!"
-        install_cleanup
-        exit 1
+        if FUN_CHECK_OS_OPTION system_package_manager apt; then
+            cp ${GL_THE_FILEPATH}/service/netoversocks-debian /etc/init.d/netoversocks
+        fi
     fi
-    clear
+    if [ ! -f /etc/init.d/netoversocks ]; then
+        FUN_ERROR_MSG "Failed to handle netoversocks chkconfig file!" "F"
+        ${GL_QUIT} 1
+    fi
+
+    if [ ! -f /etc/netoversocks.json ]; then
+        cp ${GL_THE_FILEPATH}/netoversocks.json /etc/netoversocks.json
+    fi
+    if [ ! -f /etc/netoversocks.json ]; then
+        FUN_ERROR_MSG "Failed to handle netoversocks config file!" "F"
+        ${GL_QUIT} 1
+    fi
+    cd ${GL_THE_FILEPATH}
+
+    cd ${GL_THE_FILEPATH}
+    if [ -f /usr/bin/noserver ] || [ -f /usr/local/bin/noserver ]; then
+        chmod +x /etc/init.d/netoversocks
+        if FUN_CHECK_OS_OPTION system_package_manager yum; then
+            chkconfig --add netoversocks
+            chkconfig netoversocks on
+        elif FUN_CHECK_OS_OPTION system_package_manager apt; then
+            update-rc.d -f netoversocks defaults
+        fi
+        /etc/init.d/netoversocks start
+    else
+        FUN_CLEANUP_ALL
+        FUN_ERROR_MSG "Failed to install netoversocks!" "F"
+        ${GL_QUIT} 1
+    fi
+    cd ${GL_THE_FILEPATH}
+
     echo
-    echo -e "Congratulations, Shadowsocks-python server install completed!"
-    echo -e "Your Server IP        : \033[41;37m $(get_ip) \033[0m"
-    echo -e "Your Server Port      : \033[41;37m ${shadowsocksport} \033[0m"
-    echo -e "Your Password         : \033[41;37m ${shadowsockspwd} \033[0m"
-    echo -e "Your Encryption Method: \033[41;37m ${shadowsockscipher} \033[0m"
+    FUN_INFO_MSG "Congratulation to install netover server!" "F"
+    FUN_INFO_MSG "Serve address-IP: $(FUN_GET_PUBLIC_IP_ADDRESS)" "F"
+    FUN_INFO_MSG "Serve listen-port: ${GL_SERVE_PORT}" "F"
+    FUN_INFO_MSG "Serve used-password: ${GL_USE_PASSWORD}" "F"
+    FUN_INFO_MSG "Serve encryption-method: ${GL_USE_METHOD}" "F"
     echo
-    echo "Enjoy it!"
+    FUN_INFO_MSG "Tks, enjoy it~~~" "F"
     echo
 }
 
+# DEFINE-FUNCTION:
+#   FUN_UNINSTALL: uninstall, rm installed's netoversocks files.
+function FUN_UNINSTALL()
+{
+    local uninstall_case=
 
-install_cleanup(){
-    cd ${cur_dir}
-    rm -rf shadowsocks-master.zip shadowsocks-master ${libsodium_file}.tar.gz ${libsodium_file}
-}
-
-
-uninstall_shadowsocks(){
-    printf "Are you sure uninstall Shadowsocks? (y/n) "
+    printf "Are you sure to uninstall? (y/n)"
     printf "\n"
-    read -p "(Default: n):" answer
-    [ -z ${answer} ] && answer="n"
-    if [ "${answer}" == "y" ] || [ "${answer}" == "Y" ]; then
-        ps -ef | grep -v grep | grep -i "ssserver" > /dev/null 2>&1
+    read -p "(Default: n):" uninstall_case
+
+    [ -z ${uninstall_case} ] && uninstall_case="n"
+
+    if [ "${uninstall_case}" == "y" ] || [ "${uninstall_case}" == "Y" ]; then
+        ps -ef | grep -v grep | grep -i "noserver" > /dev/null 2>&1
         if [ $? -eq 0 ]; then
-            /etc/init.d/shadowsocks stop
+            /etc/init.d/netoversocks stop
         fi
-        if check_sys packageManager yum; then
-            chkconfig --del shadowsocks
-        elif check_sys packageManager apt; then
-            update-rc.d -f shadowsocks remove
+
+        if FUN_CHECK_OS_OPTION system_package_manager yum; then
+            chkconfig --del netoversocks
+        elif FUN_CHECK_OS_OPTION system_package_manager apt; then
+            update-rc.d -f netoversocks remove
         fi
-        # delete config file
-        rm -f /etc/shadowsocks.json
-        rm -f /var/run/shadowsocks.pid
-        rm -f /etc/init.d/shadowsocks
-        rm -f /var/log/shadowsocks.log
-        if [ -f /usr/local/shadowsocks_install.log ]; then
-            cat /usr/local/shadowsocks_install.log | xargs rm -rf
+
+        rm -f /etc/netoversocks.json
+        rm -f /var/run/netoversocks.pid
+        rm -f /etc/init.d/netoversocks
+        rm -f /var/log/netoversocks.log
+
+        if [ -f ${GL_THE_FILEPATH}/install.log ]; then
+            cat ${GL_THE_FILEPATH}/install.log | xargs rm -rf
         fi
-        echo "Shadowsocks uninstall success!"
+        if [ -f ${GL_THE_FILEPATH}/install.log ]; then
+            rm -f ${GL_THE_FILEPATH}/install.log
+        fi
+
+        FUN_INFO_MSG "success to uninstall!"
     else
-        echo
-        echo "uninstall cancelled, nothing to do..."
-        echo
+        FUN_WARN_MSG "uninstall cancelled, nothing to do..."
     fi
 }
 
+# DEFINE-FUNCTION:
+#   FUN_INSTALL_MAIN: main install.
+function FUN_INSTALL_MAIN()
+{
+    FUN_CLEANUP_ALL
 
-install_shadowsocks(){
-    disable_selinux
-    pre_install
-    download_files
-    config_shadowsocks
-    if check_sys packageManager yum; then
-        firewall_set
+    FUN_DISABLE_SELINUX
+
+    FUN_PRE_INSTALL
+
+    if [ ! -f /usr/lib/libsodium.a ]; then
+        FUN_DOWNLOAD_PACKAGES libsodium
     fi
-    install
-    install_cleanup
+
+    FUN_CONF
+
+    FUN_FIREWALLD_SETTING
+
+    FUN_INSTALL
+
+    FUN_CLEANUP_ALL
 }
 
+# DEFINE-FUNCTION:
+#   FUN_UNINSTALL_MAIN: main uninstall.
+function FUN_UNINSTALL_MAIN()
+{
+    FUN_UNINSTALL
+}
 
+function FUN_TEST_OPTION_SETTING()
+{
+    local need_conf_serve_option="n"
+    local conf_serve_port=$(shuf -i 10000-30000 -n 1)
+    local conf_serve_pass=$(date +%s | sha256sum | base64 | head -c 12 ; echo)
 
-action=$1
-[ -z $1 ] && action=install
-case "$action" in
-    install|uninstall)
-        ${action}_shadowsocks
+    FUN_INFO_MSG "If u don't want to config your owner running option..., you can skip it with default config." "F"
+    FUN_INFO_MSG "Do you want to config running option? (y/n)" "F"
+    read -p "(Default: n):" need_conf_serve_option
+
+    [ -z ${need_conf_serve_option} ] && need_conf_serve_option="n"
+
+    if [ "${need_conf_serve_option}" == "y" ] || [ "${need_conf_serve_option}" == "Y" ]; then
+        FUN_INFO_MSG "Please enter password for netoversocks" "F"
+        read -p "(Default password: ${conf_serve_pass}):" GL_USE_PASSWORD
+
+        [ -z "${GL_USE_PASSWORD}" ] && GL_USE_PASSWORD="${conf_serve_pass}"
+        echo
+        FUN_INFO_MSG "Configure serve password = ${GL_SERVE_PORT}" "F"
+        echo
+
+        while true
+        do
+            FUN_INFO_MSG "Please enter a port for netoversocks [1000-65535]" "F"
+            read -p "(Default port: ${conf_serve_port}):" GL_SERVE_PORT
+
+            [ -z "${GL_SERVE_PORT}" ] && GL_SERVE_PORT=${conf_serve_port}
+
+            expr ${GL_SERVE_PORT} + 1 &>/dev/null
+
+            if [ $? -eq 0 ]; then
+                if [ ${GL_SERVE_PORT} -ge 1000 ] && [ ${GL_SERVE_PORT} -le 65535 ] && [ ${GL_SERVE_PORT:0:1} != 0 ]; then
+                    echo
+                    FUN_INFO_MSG "Configure serve port = ${GL_SERVE_PORT}" "F"
+                    echo
+                    break
+                fi
+            fi
+
+            FUN_ERROR_MSG "Please enter a correct number [1000-65535]."
+        done
+
+        while true
+        do
+            FUN_INFO_MSG "Please select stream cipher for netoversocks, like aes-256-cfb" "F"
+
+            local cipher_item_loop=
+            local cipher_item_selected=
+
+            for ((i=1; i<=${#GL_USE_METHODCIPHERS[@]}; i++)); do
+                cipher_item_loop="${GL_USE_METHODCIPHERS[$i-1]}"
+
+                FUN_INFO_MSG "[${i}] ${cipher_item_loop}" "F"
+            done
+
+            read -p "Which cipher you'd select(Default: ${GL_USE_METHODCIPHERS[0]}):" cipher_item_selected
+
+            [ -z "${cipher_item_selected}" ] && cipher_item_selected=1
+            expr ${cipher_item_selected} + 1 &>/dev/null
+
+            if [ $? -ne 0 ]; then
+                FUN_ERROR_MSG "Please enter a number."
+                continue
+            fi
+
+            if [[ "${cipher_item_selected}" -lt 1 || "${cipher_item_selected}" -gt ${#GL_USE_METHODCIPHERS[@]} ]]; then
+                FUN_ERROR_MSG "Please enter a number between 1 and ${#GL_USE_METHODCIPHERS[@]}" "F"
+                continue
+            fi
+
+            GL_USE_METHOD=${GL_USE_METHODCIPHERS[${cipher_item_selected}-1]}
+
+            echo
+            FUN_INFO_MSG "GL_USE_METHOD = ${GL_USE_METHOD}" "F"
+            echo
+            break
+        done
+    fi
+
+    echo
+    FUN_INFO_MSG "Congratulation to install netover server!" "F"
+    FUN_INFO_MSG "Serve address-IP: $(FUN_GET_PUBLIC_IP_ADDRESS)" "F"
+    FUN_INFO_MSG "Serve listen-port: ${GL_SERVE_PORT}" "F"
+    FUN_INFO_MSG "Serve used-password: ${GL_USE_PASSWORD}" "F"
+    FUN_INFO_MSG "Serve encryption-method: ${GL_USE_METHOD}" "F"
+    echo
+}
+########################################################################################################################
+#
+# Usage: install.sh [install|uninstall]
+#
+########################################################################################################################
+_action=$1
+[ -z $1 ] && _action=install
+case "x${_action}" in
+    "xinstall")
+        FUN_INSTALL_MAIN
+        ;;
+    "xuninstall")
+        FUN_UNINSTALL_MAIN
         ;;
     *)
-        echo "Arguments error! [${action}]"
-        echo "Usage: `basename $0` [install|uninstall]"
+        FUN_ERROR_MSG "Arguments error, [${_action}]" "F"
+        FUN_INFO_MSG "Usage: `basename $0` [install|uninstall]" "F"
     ;;
 esac
